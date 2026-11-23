@@ -1,0 +1,11 @@
+# Arquivos de teste - não recriar
+test_*.py
+GUIA_DE_USO.md
+install_dependencies.sh
+install_dependencies.ps1
+
+# Arquivos temporários
+*.tmp
+*.temp
+__pycache__/
+*.pyc

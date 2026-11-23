@@ -1,0 +1,22 @@
+# LexiVox — Sistema de Dublagem Automática v3.2
+# Compatível com Python 3.11+ (validado em Python 3.14 no Windows)
+
+# Transcrição de alta precisão com Silero VAD e timestamps por palavra
+faster-whisper>=1.2.0
+onnxruntime>=1.18.0
+
+# Síntese de voz neural (Microsoft Edge TTS)
+edge-tts>=7.0.0
+
+# Tradução de texto (Google + fallback MyMemory)
+deep-translator>=1.11.0
+
+# Processamento e DSP de áudio
+soundfile>=0.12.0
+numpy>=2.0.0
+
+# Interface e barra de progresso
+tqdm>=4.66.0
+
+# Opcional: separação de vocais vs instrumental (--separate-audio)
+# audio-separator>=0.24.0

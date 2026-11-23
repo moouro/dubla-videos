@@ -1,0 +1,88 @@
+# =====================================================
+# 1. Modelos de IA e Cache Local
+# =====================================================
+models/
+.cache/
+*.bin
+*.onnx
+*.pt
+*.safetensors
+
+# =====================================================
+# 2. Vídeos, Áudios, Temporários e Logs
+# =====================================================
+input_videos/
+output_videos/
+temp/
+tmp/
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.webm
+*.flv
+*.wmv
+*.wav
+*.mp3
+*.m4a
+*.log
+*.tmp
+*.temp
+comando.txt
+_temp_transcription.json
+
+# =====================================================
+# 3. Ambiente Python, IDE e Sistema Operacional
+# =====================================================
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.ruff_cache/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =====================================================
+# 4. Artefatos e Scripts Locais Descartáveis
+# =====================================================
+test_*.py
+GUIA_DE_USO.md
+install_dependencies.sh
+install_dependencies.ps1
+monitor_files.ps1
+cleanup_project.ps1
+
+# =====================================================
+# 5. Arquivos Sempre Versionados (Garantia Explícita)
+# =====================================================
+!README.md
+!CONTEXTO_PROJETO.md
+!GEMINI.md
+!requirements.txt
+!glossario.txt
