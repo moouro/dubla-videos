@@ -1,19 +1,26 @@
-# LexiVox — Sistema de Dublagem Automática v3.2
-# Compatível com Python 3.11+ (validado em Python 3.14 no Windows)
+# LexiVox v4.0 — Pipeline de Dublagem 100% Offline (Python 3.11 na .venv)
+# Instale PyTorch CPU antes se desejar otimizar o download:
+# pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 
-# Transcrição de alta precisão com Silero VAD e timestamps por palavra
+# Transcrição de alta precisão com Silero VAD e travas anti-alucinação
 faster-whisper>=1.2.0
 onnxruntime>=1.18.0
+ctranslate2>=4.5.0
 
-# Síntese de voz neural (Microsoft Edge TTS)
-edge-tts>=7.0.0
+# Tradução offline NLLB-200 (CTranslate2 + Tokenizer)
+transformers>=4.57.0,<5.0.0
+sentencepiece>=0.2.0
+huggingface-hub>=0.23.0
 
-# Tradução de texto (Google + fallback MyMemory)
-deep-translator>=1.11.0
+# Síntese de voz neural offline (Coqui XTTS-v2)
+torch>=2.2.0
+torchaudio>=2.2.0
+coqui-tts[codec]>=0.24.0
+six>=1.16.0
 
 # Processamento e DSP de áudio
 soundfile>=0.12.0
-numpy>=2.0.0
+numpy>=1.26.0
 
 # Interface e barra de progresso
 tqdm>=4.66.0

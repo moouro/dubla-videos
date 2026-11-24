@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Orquestrador CLI e Pipeline Principal da Dublagem v3.2 (Otimizado para Screencasts e Cursos de TI)
+Orquestrador CLI e Pipeline Principal da Dublagem v4.0 (100% Offline com Qualidade Máxima)
 """
 
 import argparse
@@ -16,14 +16,15 @@ from dublagem.config import (
     INPUT_DIR, OUTPUT_DIR, VOZ_PADRAO, VELOCIDADE_PADRAO,
     FORMATOS_VIDEO, USE_AUDIO_SEPARATOR, AUDIO_SEPARATOR_MODEL,
     TRANSCRIBE_ORIGINAL_VOCALS, setup_logging, MSG,
-    WHISPER_MODEL, IDIOMA_DESTINO, DUCKING_VOLUME, ORIGINAL_VOLUME
+    WHISPER_MODEL, IDIOMA_DESTINO, DUCKING_VOLUME, ORIGINAL_VOLUME,
+    MAX_FAILURE_RATIO, TRANSLATOR_MODEL, TTS_MODEL
 )
 from dublagem.utils import (
     calculate_video_hash, get_cache_paths, load_cache, save_cache
 )
 from dublagem.transcriber import transcribe_audio
 from dublagem.translator import translate_segments
-from dublagem.synthesizer import synthesize_all_segments
+from dublagem.synthesizer import synthesize_all_segments, _resolve_speaker, _has_speakable_text
 from dublagem.audio_processor import separate_audio, assemble_dubbed_audio, get_duration_ms
 from dublagem.video_processor import extract_original_audio, replace_video_audio, save_srt, parse_srt
 
@@ -33,6 +34,10 @@ def natural_sort_key(path: Path) -> List:
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', path.name)]
 
 
+def _sanitize_for_path(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9._-]", "_", value.strip()) or "default"
+
+
 async def process_video(
     video_path: Path,
     output_dir: Path,
@@ -40,6 +45,7 @@ async def process_video(
     dest_lang: str = IDIOMA_DESTINO,
     voice: str = VOZ_PADRAO,
     rate: str = VELOCIDADE_PADRAO,
+    speaker_wav: Optional[Path] = None,
     keep_audio: bool = False,
     srt_only: bool = False,
     from_srt: Optional[Path] = None,
@@ -50,8 +56,8 @@ async def process_video(
     force: bool = False
 ) -> bool:
     """
-    Pipeline principal de processamento de um vídeo.
-    Gerencia o cache inteligente das etapas (por hash de vídeo, modelo e idioma) e orquestra a execução modular.
+    Pipeline principal de processamento 100% offline de um vídeo.
+    Aplica Fail-Fast rigoroso (> MAX_FAILURE_RATIO) para nunca gerar vídeo falsamente dublado.
     """
     logging.info(f"{'=' * 60}")
     logging.info(f"🎬 Iniciando processamento: {video_path.name}")
@@ -71,8 +77,13 @@ async def process_video(
         video_hash = calculate_video_hash(video_path)
         cache = get_cache_paths(video_hash, model_name=model_name, dest_lang=dest_lang)
 
+        resolved_speaker = _resolve_speaker(voice)
+        safe_voice = _sanitize_for_path(resolved_speaker)
+        if speaker_wav and speaker_wav.exists():
+            ref_hash = hashlib.md5(str(speaker_wav.resolve()).encode("utf-8")).hexdigest()[:6]
+            safe_voice = f"clone_{ref_hash}"
         safe_rate = rate.replace('+', 'plus').replace('-', 'minus').replace('%', '')
-        voice_audio_cache_dir = cache["dir"] / f"audio_{voice}_{safe_rate}"
+        voice_audio_cache_dir = cache["dir"] / f"audio_xtts_{safe_voice}_{safe_rate}"
         voice_audio_cache_dir.mkdir(parents=True, exist_ok=True)
 
         # --- 1. Extração de Áudio Original ---
@@ -82,7 +93,7 @@ async def process_video(
         else:
             logging.info("💾 Áudio original restaurado do cache local.")
 
-        # --- 2. Isolamento de Voz/Trilha (Opcional via --separate-audio ou config) ---
+        # --- 2. Isolamento de Voz/Trilha (Opcional via --separate-audio) ---
         vocal_wav = None
         instrumental_wav = None
 
@@ -106,7 +117,7 @@ async def process_video(
                     vocal_wav = vocal_wav.replace(cached_vocal)
                     instrumental_wav = instrumental_wav.replace(cached_instrumental)
 
-        # --- 3. Transcrição (faster-whisper com VAD) ---
+        # --- 3. Transcrição Offline (faster-whisper com VAD e Travas Anti-Loop) ---
         segments = None
         detected_lang = src_lang
 
@@ -136,14 +147,32 @@ async def process_video(
                     return False
                 save_cache(cache["transcription"], {"language": detected_lang, "segments": segments})
 
-            # --- 4. Tradução (Deep Translator + fallback MyMemory) ---
+            # --- 4. Tradução Offline (NLLB-200 via CTranslate2) ---
             translated = None if force else load_cache(cache["translation"])
+            if translated is not None:
+                # Rejeita caches antigos/corrompidos com muitas falhas de tradução
+                cached_failed = sum(1 for s in translated if s.get("translation_failed"))
+                if translated and (cached_failed / len(translated)) > MAX_FAILURE_RATIO:
+                    logging.warning("⚠️ Cache de tradução anterior contém falhas acima do limite. Retraduzindo...")
+                    translated = None
+
             if translated is None:
                 effective_src = detected_lang if src_lang == "auto" else src_lang
-                translated = translate_segments(segments, effective_src, dest_lang)
+                translated, failed_trans = translate_segments(segments, effective_src, dest_lang)
                 if not translated:
                     logging.error("❌ Falha na tradução dos segmentos.")
                     return False
+
+                speakable_trans = [s for s in translated if _has_speakable_text(s.get("text", ""))]
+                if speakable_trans:
+                    failure_ratio = failed_trans / len(speakable_trans)
+                    if failure_ratio > MAX_FAILURE_RATIO:
+                        logging.error(
+                            f"❌ FAIL-FAST (Tradução): {failed_trans}/{len(speakable_trans)} segmentos falharam "
+                            f"({failure_ratio:.1%} > {MAX_FAILURE_RATIO:.0%}). Abortando para evitar vídeo sem tradução."
+                        )
+                        return False
+
                 save_cache(cache["translation"], translated)
             else:
                 logging.info("💾 Tradução restaurada do cache local.")
@@ -155,40 +184,72 @@ async def process_video(
             logging.info("💡 Revise a legenda se necessário e execute novamente com '--from-srt' para dublar.")
             return True
 
-        # --- 5. Síntese de Voz (Edge TTS) ---
+        # --- 5. Síntese de Voz Offline (Coqui XTTS-v2) ---
         synth_segments = []
         segments_to_synthesize = []
 
         for i, seg in enumerate(translated):
-            text_hash = hashlib.md5(seg["text"].encode("utf-8")).hexdigest()[:8]
-            seg_cache_mp3 = voice_audio_cache_dir / f"seg_{i:04d}_{text_hash}.mp3"
-
-            if not force and seg_cache_mp3.exists() and seg_cache_mp3.stat().st_size > 100:
+            text = seg.get("text", "")
+            if not _has_speakable_text(text):
                 synth_segments.append({
                     **seg,
-                    "audio_path": str(seg_cache_mp3),
+                    "audio_path": None,
+                    "tts_success": False,
+                    "tts_skipped": True,
+                })
+                continue
+
+            text_hash = hashlib.md5(text.encode("utf-8")).hexdigest()[:8]
+            seg_cache_wav = voice_audio_cache_dir / f"seg_{i:04d}_{text_hash}.wav"
+
+            if not force and seg_cache_wav.exists() and seg_cache_wav.stat().st_size > 1000:
+                synth_segments.append({
+                    **seg,
+                    "audio_path": str(seg_cache_wav),
                     "tts_success": True,
                     "tts_skipped": False,
                 })
             else:
                 segments_to_synthesize.append((i, {
                     **seg,
-                    "target_path": str(seg_cache_mp3)
+                    "target_path": str(seg_cache_wav)
                 }))
                 synth_segments.append(None)
 
         if segments_to_synthesize:
-            logging.info(f"🎙️ Geração de Voz: {len(segments_to_synthesize)} novos segmentos serão sintetizados.")
+            logging.info(f"🎙️ Geração de Voz (XTTS-v2): {len(segments_to_synthesize)} novos segmentos serão sintetizados.")
             raw_to_synth = [item[1] for item in segments_to_synthesize]
 
             synth_results = await synthesize_all_segments(
-                raw_to_synth, voice_audio_cache_dir, voice, rate, concurrency=5
+                segments=raw_to_synth,
+                temp_dir=voice_audio_cache_dir,
+                voice=voice,
+                rate=rate,
+                dest_lang=dest_lang,
+                speaker_wav=speaker_wav,
+                original_audio_path=original_wav
             )
 
             for idx_res, (orig_idx, _) in enumerate(segments_to_synthesize):
                 synth_segments[orig_idx] = synth_results[idx_res]
         else:
-            logging.info("💾 Todos os segmentos de voz foram restaurados do cache local.")
+            logging.info("💾 Todos os segmentos de voz XTTS-v2 foram restaurados do cache local.")
+
+        # === FAIL-FAST RIGOROSO PÓS-TTS (>10% falha = aborta geração de vídeo) ===
+        speakable_segs = [s for s in synth_segments if s and not s.get("tts_skipped")]
+        failed_tts = [s for s in speakable_segs if not s.get("tts_success")]
+        if not speakable_segs:
+            logging.error("❌ FAIL-FAST (TTS): Nenhum segmento pronunciável para sintetizar.")
+            return False
+
+        tts_fail_ratio = len(failed_tts) / len(speakable_segs)
+        if tts_fail_ratio > MAX_FAILURE_RATIO:
+            logging.error(
+                f"❌ FAIL-FAST (TTS): {len(failed_tts)}/{len(speakable_segs)} segmentos falharam na síntese "
+                f"({tts_fail_ratio:.1%} > {MAX_FAILURE_RATIO:.0%}). "
+                "Abortando geração de '_dubbed.mp4' para evitar saída com áudio original em inglês."
+            )
+            return False
 
         # --- 6. Montagem DSP de Áudio Sincronizado ---
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -233,16 +294,17 @@ async def main():
     setup_logging()
 
     parser = argparse.ArgumentParser(
-        description="LexiVox — Sistema de Dublagem Automática de Vídeos v3.2 (Otimizado para Screencasts e Tutoriais)",
+        description="LexiVox v4.0 — Sistema de Dublagem Automática 100% Offline (Whisper + NLLB-200 + Coqui XTTS-v2)",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
 
     parser.add_argument("--input", "-i", type=str, help="Arquivo de vídeo ou diretório de entrada")
     parser.add_argument("--output", "-o", type=str, help="Diretório de saída para os vídeos dublados")
     parser.add_argument("--src", default="auto", help="Idioma de origem do áudio (auto = detecção automática)")
-    parser.add_argument("--dest", default=IDIOMA_DESTINO, help=f"Idioma de destino para a tradução e dublagem (padrão: {IDIOMA_DESTINO})")
-    parser.add_argument("--voice", default=VOZ_PADRAO, help=f"Voz do Edge TTS (padrão: {VOZ_PADRAO})")
-    parser.add_argument("--rate", default=VELOCIDADE_PADRAO, help=f"Fator de velocidade da voz (padrão: {VELOCIDADE_PADRAO.replace('%', '%%')})")
+    parser.add_argument("--dest", default=IDIOMA_DESTINO, help=f"Idioma de destino para tradução e dublagem (padrão: {IDIOMA_DESTINO})")
+    parser.add_argument("--voice", default=VOZ_PADRAO, help=f"Voz XTTS-v2: marcos, damien, claribel, ana, clone ou nome exato (padrão: {VOZ_PADRAO})")
+    parser.add_argument("--speaker-wav", type=str, default=None, help="Arquivo WAV (6–12s) para clonagem zero-shot no XTTS-v2")
+    parser.add_argument("--rate", default=VELOCIDADE_PADRAO, help=f"Identificador de taxa/preset no cache (padrão: {VELOCIDADE_PADRAO.replace('%', '%%')})")
     parser.add_argument("--keep-audio", action="store_true", help="Ativa modo Voice-Over mantendo o áudio original audível ao fundo")
     parser.add_argument("--srt-only", action="store_true", help="Gera somente arquivo de legendas SRT traduzidas")
     parser.add_argument("--from-srt", type=str, default=None, help="Executa a dublagem a partir de um SRT editado manualmente (use com -i <video>)")
@@ -262,9 +324,13 @@ async def main():
     output_dir = Path(args.output) if args.output else OUTPUT_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
     from_srt_path = Path(args.from_srt) if args.from_srt else None
+    speaker_wav_path = Path(args.speaker_wav) if args.speaker_wav else None
 
     if from_srt_path and not from_srt_path.exists():
         print(f"\n❌ Arquivo SRT não encontrado: {from_srt_path}")
+        return
+    if speaker_wav_path and not speaker_wav_path.exists():
+        print(f"\n❌ Arquivo --speaker-wav não encontrado: {speaker_wav_path}")
         return
 
     video_files = []
@@ -303,14 +369,18 @@ async def main():
     else:
         modo = f"DUCKING CUSTOMIZADO ({int(DUCKING_VOLUME*100)}%/{int(ORIGINAL_VOLUME*100)}%)"
 
-    print(f"\n🎙️  LEXIVOX — SISTEMA DE DUBLAGEM AUTOMÁTICA v3.2")
+    resolved_voice_label = _resolve_speaker(args.voice)
+    if speaker_wav_path:
+        resolved_voice_label = f"Clone ({speaker_wav_path.name})"
+
+    print(f"\n🎙️  LEXIVOX v4.0 — DUBLAGEM 100% OFFLINE DE ALTA QUALIDADE")
     print("=" * 70)
     print(f"📂 Entrada:        {input_path}")
     print(f"📂 Saída:          {output_dir}")
     print(f"📽️  Vídeos:         {len(video_files)} arquivo(s)")
-    print(f"🗣️  Voz TTS:        {args.voice}")
-    print(f"🌐 Idiomas:        {args.src} ➡️ {args.dest}")
-    print(f"🧠 Motor Whisper:  faster-whisper ({args.model.upper()}) + Silero VAD")
+    print(f"🗣️  Voz XTTS-v2:    {resolved_voice_label} ({TTS_MODEL.split('/')[-1]})")
+    print(f"🌐 Tradutor:       {TRANSLATOR_MODEL} ({args.src} ➡️ {args.dest})")
+    print(f"🧠 Transcrição:    faster-whisper ({args.model.upper()}) + Silero VAD + Anti-Loop")
     print(f"🎧 Modo Ativo:     {modo}")
     print("=" * 70 + "\n")
 
@@ -326,6 +396,7 @@ async def main():
                 dest_lang=args.dest,
                 voice=args.voice,
                 rate=args.rate,
+                speaker_wav=speaker_wav_path,
                 keep_audio=args.keep_audio,
                 srt_only=args.srt_only,
                 from_srt=from_srt_path,

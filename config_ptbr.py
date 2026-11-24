@@ -48,29 +48,41 @@ MODELS_DIR = SCRIPT_DIR / "models"
 # Padrão ouro: large-v3 para precisão técnica máxima em termos de programação
 WHISPER_MODEL = "large-v3"
 WHISPER_DEVICE = "cpu"
-WHISPER_COMPUTE_TYPE = "int8"       # Otimizado para Intel Core i5 com AVX2
-WHISPER_CPU_THREADS = 10           # 10 threads para equilibrar com os núcleos do i5-13400F
-WHISPER_VAD_FILTER = True          # Silero VAD para filtrar silêncios e ruídos de teclado
-WHISPER_VAD_MIN_SILENCE_MS = 400   # Pausa mínima para considerar corte sem alucinações
+WHISPER_COMPUTE_TYPE = "int8"               # Otimizado para Intel Core i5 com AVX2
+WHISPER_CPU_THREADS = 10                   # 10 threads para equilibrar com os núcleos do i5-13400F
+WHISPER_VAD_FILTER = True                  # Silero VAD para filtrar silêncios e ruídos de teclado
+WHISPER_VAD_MIN_SILENCE_MS = 400           # Pausa mínima para considerar corte sem alucinações
+WHISPER_CONDITION_ON_PREVIOUS_TEXT = False # Evita loops de repetição em pausas longas
+WHISPER_REPETITION_PENALTY = 1.1           # Penaliza tokens repetidos em sequência
+WHISPER_NO_REPEAT_NGRAM_SIZE = 3           # Bloqueia n-grams repetidos consecutivos
+WHISPER_HALLUCINATION_SILENCE_THRESHOLD = 2.0
 
 # =====================================================
-# IDIOMA E TRADUÇÃO
+# IDIOMA E TRADUÇÃO OFFLINE (NLLB-200 via CTranslate2)
 # =====================================================
 
 IDIOMA_DESTINO = "pt"
+TRANSLATOR_MODEL = "OpenNMT/nllb-200-3.3B-ct2-int8"
+TRANSLATOR_TOKENIZER = "facebook/nllb-200-distilled-600M"
+TRANSLATOR_CPU_THREADS = 10
 
 # =====================================================
-# VOZES TTS (Microsoft Edge Neural)
+# VOZES TTS OFFLINE (Coqui XTTS-v2 — Neural PT-BR)
 # =====================================================
+
+TTS_ENGINE = "xtts"
+TTS_MODEL = "tts_models/multilingual/multi-dataset/xtts_v2"
+TTS_CPU_THREADS = 10
 
 VOZES = {
-    "antonio": "pt-BR-AntonioNeural",    # Masculina - natural e clara
-    "donato": "pt-BR-DonatoNeural",      # Masculina - tom mais grave
-    "francisca": "pt-BR-FranciscaNeural",  # Feminina - profissional
-    "brenda": "pt-BR-BrendaNeural",      # Feminina - tom mais suave
+    "marcos": "Marcos Rudaski",     # Masculina - natural e clara (padrão)
+    "damien": "Damien Black",       # Masculina - tom mais grave
+    "claribel": "Claribel Dervla",  # Feminina - profissional e clara
+    "ana": "Ana Florence",          # Feminina - tom suave
+    "clone": "auto_clone",          # Clona automaticamente ~10s da voz do instrutor original
 }
 
-VOZ_PADRAO = VOZES["antonio"]
+VOZ_PADRAO = VOZES["marcos"]
 
 # =====================================================
 # VELOCIDADE DE FALA
@@ -96,10 +108,11 @@ TTS_TIMEOUT = 60       # segundos
 TRANSLATION_TIMEOUT = 30
 
 # =====================================================
-# TRADUÇÃO
+# TRADUÇÃO E RESILIÊNCIA (FAIL-FAST)
 # =====================================================
 
-MAX_TEXT_CHUNK_SIZE = 800
+MAX_TEXT_CHUNK_SIZE = 450
+MAX_FAILURE_RATIO = 0.10  # Aborta o vídeo se >10% dos segmentos falharem na tradução ou TTS
 
 # Termos técnicos que NÃO devem ser traduzidos (web dev / full stack)
 # Adicione ou remova termos conforme necessário
@@ -154,8 +167,8 @@ if GLOSSARIO_PATH.exists():
 MERGE_MAX_GAP_MS = 600
 # Duração máxima (ms) de um segmento merged
 MERGE_MAX_DURATION_MS = 14000
-# Limite máximo de caracteres por segmento merged (mantém compatibilidade com MyMemory <= 500 e SRT legível)
-MERGE_MAX_CHARS = 450
+# Limite máximo de caracteres por segmento merged (ótima prosódia no XTTS-v2 e precisão no NLLB-200)
+MERGE_MAX_CHARS = 350
 
 # =====================================================
 # SEPARAÇÃO DE ÁUDIO (Voz vs Música/Efeitos)
@@ -209,8 +222,8 @@ MSG = {
     "iniciando": "🎬 Iniciando dublagem automática...",
     "detectando": "🔍 Detectando idioma original...",
     "transcrevendo": "📝 Transcrevendo áudio com faster-whisper...",
-    "traduzindo": "🌐 Traduzindo para português brasileiro...",
-    "sintetizando": "🎤 Gerando nova dublagem...",
+    "traduzindo": "🌐 Traduzindo offline com NLLB-200 (CTranslate2)...",
+    "sintetizando": "🎤 Gerando dublagem neural offline (Coqui XTTS-v2)...",
     "sincronizando": "⚡ Sincronizando com vídeo original...",
     "finalizando": "🎯 Finalizando vídeo dublado...",
     "concluido": "✅ Dublagem concluída com sucesso!",
@@ -222,10 +235,11 @@ MSG = {
 # =====================================================
 
 def validar():
-    """Valida se a configuração e dependências estão prontas"""
+    """Valida se a configuração, Python 3.11 (.venv) e dependências v4.0 estão prontas"""
+    import importlib
+    import platform
     erros = []
 
-    # Testa FFmpeg e FFprobe
     if not shutil.which("ffmpeg"):
         erros.append(
             "FFmpeg não encontrado no PATH.\n"
@@ -237,21 +251,24 @@ def validar():
             "   Instale com: winget install --id=yt-dlp.FFmpeg -e"
         )
 
-    # Testa bibliotecas Python obrigatórias
     dependencias = [
         ("faster_whisper", "faster-whisper"),
-        ("onnxruntime", "onnxruntime (necessário para Silero VAD)"),
-        ("edge_tts", "edge-tts"),
-        ("deep_translator", "deep-translator"),
+        ("onnxruntime", "onnxruntime (Silero VAD)"),
+        ("ctranslate2", "ctranslate2 (Whisper + NLLB-200)"),
+        ("transformers", "transformers (Tokenizer NLLB-200)"),
+        ("sentencepiece", "sentencepiece (Tokenizer NLLB-200)"),
+        ("huggingface_hub", "huggingface-hub"),
+        ("torch", "torch (PyTorch CPU para XTTS-v2)"),
+        ("TTS.api", "coqui-tts (XTTS-v2)"),
         ("soundfile", "soundfile"),
         ("numpy", "numpy"),
         ("tqdm", "tqdm"),
     ]
     for modulo, pacote in dependencias:
         try:
-            __import__(modulo)
+            importlib.import_module(modulo)
         except ImportError:
-            erros.append(f"{pacote} não instalado. Execute: pip install -r requirements.txt")
+            erros.append(f"{pacote} não instalado no Python atual ({platform.python_version()}). Use .venv\\Scripts\\python.exe")
 
     if erros:
         print("❌ Problemas encontrados:")
@@ -265,12 +282,14 @@ def validar():
         else f"Ducking customizado ({int(ORIGINAL_VOLUME * 100)}% gaps / {int(DUCKING_VOLUME * 100)}% fala)"
     )
 
-    print("🔧 Configuração (LexiVox v3.2):")
-    print(f"   • Motor Whisper: faster-whisper ({WHISPER_MODEL}) [Device: {WHISPER_DEVICE} | Threads: {WHISPER_CPU_THREADS}]")
-    print(f"   • Voz padrão:    {VOZ_PADRAO}")
+    print(f"🔧 Configuração (LexiVox v4.0 — Python {platform.python_version()}):")
+    print(f"   • Transcrição:   faster-whisper ({WHISPER_MODEL}) [Device: {WHISPER_DEVICE} | Threads: {WHISPER_CPU_THREADS}]")
+    print(f"   • Tradutor:      {TRANSLATOR_MODEL} (offline CTranslate2)")
+    print(f"   • Voz TTS:       {TTS_MODEL} -> '{VOZ_PADRAO}'")
     print(f"   • Velocidade:    {VELOCIDADE_PADRAO}")
     print(f"   • Idioma:        auto -> {IDIOMA_DESTINO}")
     print(f"   • Modo de áudio: {modo_audio}")
+    print(f"   • Fail-Fast:     aborta se falha > {int(MAX_FAILURE_RATIO * 100)}% dos segmentos")
     print("✅ Todas as dependências e configurações estão prontas!")
     return True
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Módulo de Transcrição de Alta Fidelidade via faster-whisper (CTranslate2)
-Inclui Silero VAD (Voice Activity Detection), Timestamps por Palavra e Consolidação Inteligente
+Inclui Silero VAD, Travas Anti-Alucinação, Timestamps por Palavra e Merge Inteligente
 """
 
 import logging
@@ -18,6 +18,8 @@ from dublagem.config import (
     MODELS_DIR, MSG, WHISPER_MODEL, WHISPER_DEVICE,
     WHISPER_COMPUTE_TYPE, WHISPER_CPU_THREADS,
     WHISPER_VAD_FILTER, WHISPER_VAD_MIN_SILENCE_MS,
+    WHISPER_CONDITION_ON_PREVIOUS_TEXT, WHISPER_REPETITION_PENALTY,
+    WHISPER_NO_REPEAT_NGRAM_SIZE, WHISPER_HALLUCINATION_SILENCE_THRESHOLD,
     MERGE_MAX_GAP_MS, MERGE_MAX_DURATION_MS, MERGE_MAX_CHARS
 )
 
@@ -40,7 +42,6 @@ def get_whisper_model(model_name: str = WHISPER_MODEL) -> WhisperModel:
     """
     global _CACHED_MODEL, _CACHED_MODEL_NAME
 
-    # Normaliza nomes de modelos (ex: 'ggml-large-v3.bin' -> 'large-v3')
     clean_name = model_name.lower().strip()
     if "large-v3" in clean_name and "turbo" not in clean_name:
         clean_name = "large-v3"
@@ -64,13 +65,24 @@ def get_whisper_model(model_name: str = WHISPER_MODEL) -> WhisperModel:
         f"[Device: {WHISPER_DEVICE} | Compute: {WHISPER_COMPUTE_TYPE} | Threads: {WHISPER_CPU_THREADS}]..."
     )
 
-    model = WhisperModel(
-        model_size_or_path=clean_name,
-        device=WHISPER_DEVICE,
-        compute_type=WHISPER_COMPUTE_TYPE,
-        cpu_threads=WHISPER_CPU_THREADS,
-        download_root=str(fw_models_dir)
-    )
+    # Tenta carregar localmente antes para funcionar 100% offline quando já baixado
+    try:
+        model = WhisperModel(
+            model_size_or_path=clean_name,
+            device=WHISPER_DEVICE,
+            compute_type=WHISPER_COMPUTE_TYPE,
+            cpu_threads=WHISPER_CPU_THREADS,
+            download_root=str(fw_models_dir),
+            local_files_only=True
+        )
+    except Exception:
+        model = WhisperModel(
+            model_size_or_path=clean_name,
+            device=WHISPER_DEVICE,
+            compute_type=WHISPER_COMPUTE_TYPE,
+            cpu_threads=WHISPER_CPU_THREADS,
+            download_root=str(fw_models_dir)
+        )
 
     _CACHED_MODEL = model
     _CACHED_MODEL_NAME = clean_name
@@ -103,7 +115,7 @@ def transcribe_audio(
     language: str = "auto"
 ) -> Tuple[List[Dict], str]:
     """
-    Transcreve áudio/vídeo utilizando faster-whisper com Silero VAD ativo.
+    Transcreve áudio/vídeo utilizando faster-whisper com Silero VAD e travas anti-alucinação.
     Retorna uma tupla (segmentos_consolidados, idioma_detectado).
     """
     model = get_whisper_model(model_name)
@@ -111,17 +123,14 @@ def transcribe_audio(
     lang_param = None if (not language or language == "auto") else language
     logging.info(f"{MSG['transcrevendo']} (Arquivo: {media_path.name} | Idioma: {language})")
 
-    # Carrega o áudio diretamente em memória
     audio_data = load_audio_for_whisper(media_path)
     total_duration = len(audio_data) / 16000.0
 
-    # Parâmetros VAD otimizados para evitar alucinações durante pausas e digitação de código
     vad_params = dict(
         min_silence_duration_ms=WHISPER_VAD_MIN_SILENCE_MS,
         speech_pad_ms=200
     )
 
-    # Executa a transcrição
     segments_gen, info = model.transcribe(
         audio_data,
         language=lang_param,
@@ -130,7 +139,13 @@ def transcribe_audio(
         word_timestamps=True,
         beam_size=5,
         best_of=5,
-        temperature=[0.0, 0.2, 0.4]
+        temperature=[0.0, 0.2, 0.4],
+        condition_on_previous_text=WHISPER_CONDITION_ON_PREVIOUS_TEXT,
+        repetition_penalty=WHISPER_REPETITION_PENALTY,
+        no_repeat_ngram_size=WHISPER_NO_REPEAT_NGRAM_SIZE,
+        hallucination_silence_threshold=WHISPER_HALLUCINATION_SILENCE_THRESHOLD,
+        compression_ratio_threshold=2.4,
+        no_speech_threshold=0.6
     )
 
     raw_lang = getattr(info, "language", None)
@@ -141,7 +156,6 @@ def transcribe_audio(
 
     raw_segments = []
 
-    # Barra de progresso baseada nos segundos de áudio transcritos
     with tqdm(total=int(total_duration), desc="Transcrevendo (VAD)", unit="s", dynamic_ncols=True) as pbar:
         last_progress_s = 0.0
         for seg in segments_gen:
@@ -152,7 +166,6 @@ def transcribe_audio(
             start_ms = int(seg.start * 1000)
             end_ms = int(seg.end * 1000)
 
-            # Se timestamps por palavra estiverem disponíveis, refina o início e fim exatos da fala
             if seg.words:
                 first_word = seg.words[0]
                 last_word = seg.words[-1]
@@ -171,16 +184,15 @@ def transcribe_audio(
                 pbar.update(progress_delta)
                 last_progress_s = seg.end
 
-        # Garante fechamento completo da barra de progresso
         if total_duration > last_progress_s:
             pbar.update(int(total_duration - last_progress_s))
 
     if not raw_segments:
         raise RuntimeError("❌ Nenhum segmento de fala foi detectado no vídeo/áudio.")
 
-    # Limpa sobreposições e agrupa frases semanticamente
     cleaned = _deduplicate_segments(raw_segments)
-    merged = _merge_segments(cleaned)
+    no_loops = _remove_repetition_loops(cleaned)
+    merged = _merge_segments(no_loops)
 
     logging.info(f"✅ Transcrição concluída: {len(raw_segments)} falas consolidadas em {len(merged)} segmentos lógicos.")
     return merged, detected_lang
@@ -209,7 +221,6 @@ def _deduplicate_segments(segments: List[Dict]) -> List[Dict]:
                 if seg_dur > prev_dur and (overlap / prev_dur) > 0.5:
                     cleaned[-1] = seg
             else:
-                # Pequeno atrito de fronteira: faz clamping do início sem perder o segmento
                 seg["start_ms"] = prev["end_ms"]
                 if seg["end_ms"] > seg["start_ms"]:
                     cleaned.append(seg)
@@ -217,6 +228,49 @@ def _deduplicate_segments(segments: List[Dict]) -> List[Dict]:
             cleaned.append(seg)
 
     return cleaned
+
+
+def _remove_repetition_loops(segments: List[Dict]) -> List[Dict]:
+    """
+    Proteção adicional contra loops de alucinação do Whisper:
+    Se 3 ou mais segmentos consecutivos possuírem texto normalizado idêntico,
+    mantém apenas a primeira ocorrência e descarta as repetições seguintes.
+    """
+    if len(segments) < 3:
+        return segments
+
+    filtered: List[Dict] = []
+    i = 0
+    removed_total = 0
+
+    while i < len(segments):
+        norm_curr = re.sub(r"\s+", " ", segments[i]["text"].strip().lower())
+        j = i + 1
+        while j < len(segments):
+            norm_next = re.sub(r"\s+", " ", segments[j]["text"].strip().lower())
+            if norm_curr and norm_next == norm_curr:
+                j += 1
+            else:
+                break
+
+        run_len = j - i
+        filtered.append(segments[i])
+        if run_len >= 3:
+            removed = run_len - 1
+            removed_total += removed
+            logging.warning(
+                f"⚠️ Loop de repetição detectado pelo Whisper ({run_len}x): "
+                f"'{segments[i]['text'][:50]}...'. Mantendo 1ª ocorrência e descartando {removed}."
+            )
+        else:
+            for k in range(i + 1, j):
+                filtered.append(segments[k])
+        i = j
+
+    if removed_total > 0:
+        logging.info(f"🧹 Filtro anti-loop removeu {removed_total} segmentos duplicados em sequência.")
+
+    return filtered
 
 
 def _ends_sentence(text: str) -> bool:

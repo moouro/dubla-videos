@@ -52,13 +52,24 @@ WHISPER_COMPUTE_TYPE = getattr(user_config, "WHISPER_COMPUTE_TYPE", "int8")
 WHISPER_CPU_THREADS = getattr(user_config, "WHISPER_CPU_THREADS", 10)
 WHISPER_VAD_FILTER = getattr(user_config, "WHISPER_VAD_FILTER", True)
 WHISPER_VAD_MIN_SILENCE_MS = getattr(user_config, "WHISPER_VAD_MIN_SILENCE_MS", 400)
+WHISPER_CONDITION_ON_PREVIOUS_TEXT = getattr(user_config, "WHISPER_CONDITION_ON_PREVIOUS_TEXT", False)
+WHISPER_REPETITION_PENALTY = getattr(user_config, "WHISPER_REPETITION_PENALTY", 1.1)
+WHISPER_NO_REPEAT_NGRAM_SIZE = getattr(user_config, "WHISPER_NO_REPEAT_NGRAM_SIZE", 3)
+WHISPER_HALLUCINATION_SILENCE_THRESHOLD = getattr(user_config, "WHISPER_HALLUCINATION_SILENCE_THRESHOLD", 2.0)
 
-# --- TRADUÇÃO E IDIOMA ---
+# --- TRADUÇÃO OFFLINE E IDIOMA ---
 IDIOMA_DESTINO = getattr(user_config, "IDIOMA_DESTINO", "pt")
 TERMOS_TECNICOS = getattr(user_config, "TERMOS_TECNICOS", [])
-MAX_TEXT_CHUNK_SIZE = getattr(user_config, "MAX_TEXT_CHUNK_SIZE", 800)
+MAX_TEXT_CHUNK_SIZE = getattr(user_config, "MAX_TEXT_CHUNK_SIZE", 450)
+MAX_FAILURE_RATIO = getattr(user_config, "MAX_FAILURE_RATIO", 0.10)
+TRANSLATOR_MODEL = getattr(user_config, "TRANSLATOR_MODEL", "OpenNMT/nllb-200-3.3B-ct2-int8")
+TRANSLATOR_TOKENIZER = getattr(user_config, "TRANSLATOR_TOKENIZER", "facebook/nllb-200-distilled-600M")
+TRANSLATOR_CPU_THREADS = getattr(user_config, "TRANSLATOR_CPU_THREADS", 10)
 
-# --- VOZ E VELOCIDADE ---
+# --- VOZ E VELOCIDADE (XTTS-v2) ---
+TTS_ENGINE = getattr(user_config, "TTS_ENGINE", "xtts")
+TTS_MODEL = getattr(user_config, "TTS_MODEL", "tts_models/multilingual/multi-dataset/xtts_v2")
+TTS_CPU_THREADS = getattr(user_config, "TTS_CPU_THREADS", 10)
 VOZES = user_config.VOZES
 VOZ_PADRAO = user_config.VOZ_PADRAO
 VELOCIDADE_PADRAO = user_config.VELOCIDADE_PADRAO
@@ -82,7 +93,7 @@ TRANSCRIBE_ORIGINAL_VOCALS = getattr(user_config, "TRANSCRIBE_ORIGINAL_VOCALS", 
 # --- MERGE DE SEGMENTOS ---
 MERGE_MAX_GAP_MS = getattr(user_config, "MERGE_MAX_GAP_MS", 600)
 MERGE_MAX_DURATION_MS = getattr(user_config, "MERGE_MAX_DURATION_MS", 14000)
-MERGE_MAX_CHARS = getattr(user_config, "MERGE_MAX_CHARS", 450)
+MERGE_MAX_CHARS = getattr(user_config, "MERGE_MAX_CHARS", 350)
 
 # --- RETRY E TIMEOUTS ---
 MAX_RETRIES = getattr(user_config, "MAX_RETRIES", 3)

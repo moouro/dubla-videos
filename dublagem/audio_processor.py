@@ -388,7 +388,8 @@ async def assemble_dubbed_audio(
     }
 
     # --- FASE 2: MONTAGEM E MIXAGEM DOS ÁUDIOS EM MEMÓRIA ---
-    placed = 0
+    tts_placed = 0
+    fallback_placed = 0
     placed_regions = []
     crossfade_samples = int(0.030 * AUDIO_SAMPLE_RATE)
 
@@ -416,7 +417,7 @@ async def assemble_dubbed_audio(
 
                     if available_space > 0 and start_sample >= 0:
                         dubbed_audio[start_sample:end_sample_placed] += audio_data[:available_space]
-                        placed += 1
+                        tts_placed += 1
                         success_placed = True
 
                         actual_end_ms = (end_sample_placed / AUDIO_SAMPLE_RATE) * 1000.0
@@ -429,22 +430,25 @@ async def assemble_dubbed_audio(
                     logging.warning(f"⚠️ Erro ao ler áudio ajustado do segmento {i}: {e}")
 
             if not success_placed and not seg.get("tts_skipped") and orig_data is not None:
-                logging.warning(f"⚠️ Fallback de emergência (falha pós-ajuste) para o segmento {i}: voz original injetada.")
+                logging.warning(f"⚠️ Fallback pontual (falha pós-ajuste) para o segmento {i}: voz original injetada.")
                 avail = min(end_sample, len(orig_data)) - start_sample
                 if avail > 0 and start_sample >= 0:
                     dubbed_audio[start_sample:start_sample + avail] += orig_data[start_sample:start_sample + avail]
-                    placed += 1
+                    fallback_placed += 1
         else:
             if not seg.get("tts_skipped") and orig_data is not None and end_sample > start_sample:
-                logging.warning(f"⚠️ Fallback de emergência: TTS do segmento {i} falhou. Injetando áudio original.")
+                logging.warning(f"⚠️ Fallback pontual: TTS do segmento {i} falhou. Injetando áudio original.")
                 avail = min(end_sample, len(orig_data)) - start_sample
                 if avail > 0 and start_sample >= 0:
                     dubbed_audio[start_sample:start_sample + avail] += orig_data[start_sample:start_sample + avail]
-                    placed += 1
+                    fallback_placed += 1
 
-    if placed == 0:
-        logging.error("❌ Erro fatal: Nenhum segmento pôde ser posicionado no áudio final.")
+    if tts_placed == 0:
+        logging.error("❌ Erro fatal: Nenhum segmento TTS real pôde ser posicionado no áudio final. Abortando geração.")
         return False
+
+    if fallback_placed > 0:
+        logging.warning(f"⚠️ Montagem concluída com {tts_placed} segmentos dublados e {fallback_placed} fallbacks pontuais.")
 
     # --- FASE 3: MIXAGEM DE TRILHAS E DUCKING INTELIGENTE ---
 
