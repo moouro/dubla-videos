@@ -61,7 +61,8 @@
 - [x] Python 3.11.9 instalado e `.venv/` configurada com PyTorch CPU (`2.15.0+cpu`) + `coqui-tts[codec]` (`0.28.0`) + `six` + `transformers 4.57.6` + `faster-whisper` + `ctranslate2`.
 - [x] Pipeline reescrito para v4.0 100% offline (`transcriber.py` anti-loop, `translator.py` NLLB-200 CTranslate2, `synthesizer.py` Coqui XTTS-v2 com suporte a clonagem, `cli.py` e `audio_processor.py` com Fail-Fast `>10%`).
 - [x] Modelos locais (`faster-whisper large-v3`, `OpenNMT/nllb-200-3.3B-ct2-int8`, `facebook/nllb-200-distilled-600M` tokenizer e `Coqui XTTS-v2`) baixados em `models/` e validados 100% offline em `0001_01_What_Is_CSS.mp4` (`17/17` segmentos, 0 falhas, 0 warnings, saída `19.5 MB` em Modo Filme).
-- [ ] Reprocessar os demais cursos em `input_videos/` (`0002_02_CSS_Basic_Syntax.mp4`, `0020_20_Floats.mp4`) com `--force` e commitar as mudanças da v4.0 no GitHub.
+- [x] Código da v4.0 commitado e publicado no GitHub (`commit 35a3279` em `origin/main`).
+- [ ] Reprocessar os demais cursos em `input_videos/` (`0002_02_CSS_Basic_Syntax.mp4`, `0020_20_Floats.mp4`) com `--force`.
 
 ---
 
@@ -85,3 +86,4 @@
 * **Diagnóstico do `dubbing.log`:** `edge-tts` falhou em 100% dos segmentos com `HTTP 403`, `GoogleTranslator`/`MyMemory` atingiram limite de cota no 2º vídeo, fallback de áudio injetou inglês mascarando erro como sucesso, e `faster-whisper` entrou em loop repetitivo no Vídeo 3.
 * **Implementação v4.0:** Criada `.venv/` Python 3.11 com bootstrap automático em `run.py`/`dublar.py`; migrada tradução para `OpenNMT/nllb-200-3.3B-ct2-int8` (`ctranslate2` offline); migrado TTS para `Coqui XTTS-v2` (speakers nativos + `--voice clone` / `--speaker-wav`); adicionadas travas anti-alucinação + `_remove_repetition_loops()` no `transcriber.py`; implementado Fail-Fast rigoroso (`>10%` de falhas aborta antes de gerar MP4).
 * **Ajustes pós-teste e validação real:** Instalados `coqui-tts[codec]` (`torchcodec`) e `six>=1.16.0`; fixado `transformers>=4.57.0,<5.0.0` (`4.57.6`) para corrigir `get_seq_length` no `GPT2InferenceModel` do XTTS-v2; siglas maiúsculas `<= 6` letras (`CSS`, `HTML`, etc.) preservadas diretamente no NLLB e demais termos via `[N]`; adicionado `_prepare_xtts_text(max_chars=185)` evitando truncamentos em `pt`; pipeline ponta-a-ponta validado 100% offline em `0001_01_What_Is_CSS.mp4` (`17/17` segmentos, 0 falhas, 0 warnings, `0001_01_What_Is_CSS_dubbed.mp4` 19.5 MB em Modo Filme).
+* **Publicação no GitHub (`2026-11-24`):** Alterações da v4.0 enviadas para `origin/main` no commit `35a3279` (`a27c218..35a3279  main -> main`, 14 arquivos alterados).
